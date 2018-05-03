@@ -1,0 +1,1985 @@
+/**********************************************************************
+  Module: console.h
+  Author: Jim Young
+  Date:   2017 May 3
+
+  Purpose: Draw 2d images on the screen.  Also, draw main game image.
+
+  Changes: 
+    2017 May 3 [ Jim Young ]
+
+  NOTES: none of these functions are re-entrant (they are not thread
+	 		safe)
+**********************************************************************/
+
+#ifndef CONSOLE_H
+#define CONSOLE_H
+
+#include <stdbool.h>
+
+/**************** DRAWING **************************/
+
+/* directions in terms of deltas in x / y dimension */
+#define LEFT -1
+#define RIGHT 1
+#define UP -1
+#define DOWN 1
+
+#define SCR_LEFT 0
+#define SCR_TOP 0
+
+/* Initialize curses, draw initial gamescreen. Refreshes console to terminal. 
+ Also stores the requested dimensions of the consoe and tests the terminal for the
+ given dimensions.*/
+extern bool consoleInit(int reqHeight, int reqWidth, char *image[]);
+
+/* Draws 2d `image' of `height' rows, at curses coordinates `(row, col)'.
+   Note: parts of the `image' falling on negative rows are not drawn; each
+   row drawn is clipped on the left and right side of the game console (note
+   that `col' may be negative, indicating `image' starts to the left of the
+   screen and will thus only be partially drawn. Useful for objects that are
+   half off the screen  */
+extern void consoleDrawImage(int row, int col, char *image[], int height);
+
+/* Clears a 2d `width'x`height' rectangle with spaces.  Upper left hand
+   corner is curses coordinate `(row,col)'. */
+extern void consoleClearImage(int row, int col, int width, int height);
+
+/* Moves cursor to bottom right corner and refreshes. If this is not done,
+   the curses internal buffer (that you have been drawing to) is not dumped
+   to screen. */
+extern void consoleRefresh(void);
+
+/*  turns off all updates. Can be used to prevent the screen refresh from working, e.g., at game end while threads are all catching up.*/
+extern void disableConsole(int disabled);
+
+/* Terminates curses cleanly. */
+extern void consoleFinish(void);
+
+/* Puts the given banner in the center of the screen */
+void putBanner(const char *);
+
+/* Draws the given string at the given location  */
+void putString(char *, int row, int col, int maxlen);
+
+/* Sleeps the given number of 10ms ticks */
+void sleepTicks(int ticks);
+
+/* clears the input buffer and then waits for one more key */
+void finalKeypress();
+
+/* gets a timespec that represents the time of one tick */
+struct timespec getTimeout(int ticks);
+
+#endif /* CONSOLE_H */
+/**********************************************************************
+  Module: frogger.h
+  Author: Will Coombs
+  Date:   2017 June 13
+
+  Purpose: Create threads used in the game program, cleanup dead logs
+  (logs that are offscreen), and cleanup the game when it is over.
+
+  Changes: 
+
+  NOTES: None.
+**********************************************************************/
+
+#ifndef FROGGER_H
+#define FROGGER_H
+
+#define GAME_ROWS 24
+#define GAME_COLS 80
+
+/* Executes the game, function is called from main */
+void executeGame();
+
+/* Initializes the various threads, lists, etc. used by the game */
+void initialize();
+
+/* Function that calls the screen refresh function from console, while
+ * the game is running */
+void *refreshScreen(void *place_holder);
+
+/* Function that performs regular upkeep of the game, like putting
+ * player lives to the screen and calling the dead log cleanup */
+void *upkeep(void *place_holder);
+
+/* Function that frees the memory used by dead logs */
+void cleanupDeadLogs();
+
+/* Function that cleans up mutexes, list memory, etc. */
+void exitGame();
+
+#endif
+/**********************************************************************
+  Module: gameglobals.h
+  Author: Will Coombs
+  Date:   2017 June 13
+
+  Purpose: Maintain the various globals used by threads in the program.
+
+  Changes: 
+
+  NOTES: All mutexes are accessed via this class.
+**********************************************************************/
+
+#ifndef GAMEGLOBALS_H
+#define GAMEGLOBALS_H
+
+#include "linkedlist.h"
+#include <stdbool.h>
+
+#define NUMBER_OF_BAYS 5
+
+typedef struct THREADARGS Thread_Args;
+struct THREADARGS {
+  char row_number;
+  int array_index;
+};
+
+typedef struct BAY Bay;
+struct BAY {
+  int left_border;
+  int right_border;
+  bool contains_frog;
+};
+
+/* Function that initializes the linked list used for logs */
+void initializeLogList();
+
+/* Function that returns a pointer to the log list, used in functions
+ * that require the log list, not used as a global in each file */
+LinkedList *getLogList();
+
+
+/* Updates the overarching boolean that specifies that the game is
+ * running or not */
+void setGameStillRunning(bool result);
+
+/* Returns whether or not the game is still running based on the above
+ * variable */
+bool gameStillRunning();
+
+/* Function that updates the player's lives */
+void setPlayerLives(int amount);
+
+/* Function that returns how many lives the player has */
+int getPlayerLives();
+
+
+/* Function that initializes all the mutexes used by the threads */
+void initializeMutexes();
+
+/* Tells the calling thread to wait on the game running condition */
+void conditionWait();
+
+/* Function that signals when the game is over, which is then used by
+ * the main thread to wake up and begin cleanup */
+void conditionSignal();
+
+/* Function that destroys all mutexes used by the threads */
+void destroyMutexes();
+
+/* Functions that lock a specific mutex */
+void lockGameRunning();
+void lockScreen();
+void lockPlayer();
+void lockKeyboard();
+void lockUpkeep();
+void lockLogManagers();
+void lockLogList();
+
+/* Functions that unlock a specific mutex */
+void unlockGameRunning();
+void unlockScreen();
+void unlockPlayer();
+void unlockKeyboard();
+void unlockUpkeep();
+void unlockLogManagers();
+void unlockLogList();
+
+#endif
+/**********************************************************************
+  Module: linkedlist.h
+  Author: Will Coombs
+  Date:   2017 June 13
+
+  Purpose: Maintain a generic, circular linked list and provides
+  validations upon the list.
+
+  Changes: 
+
+  NOTES: None of these functions are thread-safe.
+**********************************************************************/
+
+#ifndef LINKEDLIST_H
+#define LINKEDLIST_H
+
+#include <stdbool.h>
+
+typedef struct NODE Node;
+struct NODE {
+  void *element;
+  Node *next;
+};
+
+typedef struct LINKEDLIST LinkedList;
+struct LINKEDLIST {
+  Node *top;
+  Node *tail;
+  Node *traversal_node;
+  int number_of_nodes;
+};
+
+/* Creates a new Linked List and returns it to the caller */
+LinkedList *createList();
+
+/* Validates a given linked list with various assertions */
+void validateLinkedList(LinkedList *list);
+
+/* Function that adds a given element to a given list, at the end
+ * of the given list */
+bool add(LinkedList *list, void *new_element);
+
+/* Function that deletes a given target element from the given list */
+bool delete(LinkedList *list, void *target);
+
+
+/* Function that deletes a given list's elements */
+void destroyList(LinkedList *list);
+
+/* Function that returns the first element in a given list */
+void *firstElement(LinkedList *list);
+
+/* Function that returns the next element in a given list, and updates
+ * the traversal node appropriately */
+void *nextElement(LinkedList *list);
+
+#endif
+/**********************************************************************
+  Module: log.h
+  Author: Will Coombs
+  Date:   2017 June 13
+
+  Purpose: Maintain log logic and draw/animate the logs on screen.
+
+  Changes: 
+
+  NOTES: None.
+**********************************************************************/
+
+#ifndef LOG_H
+#define LOG_H
+
+#include <stdbool.h>
+
+#define ROW_1_Y 16
+#define ROW_2_Y 12
+#define ROW_3_Y 8
+#define ROW_4_Y 4
+
+typedef struct LOG Log;
+struct LOG {
+  bool contains_frog;
+  int row;
+  int currX;
+  int displacement;
+  bool on_screen;
+  char **curr_log_tile;
+  int curr_graphic_index;
+  int animate_sleep;
+  int max_animate;
+  int move_sleep;
+  int max_move;
+  pthread_t thread_id;
+  bool has_been_joined;
+};
+
+/* Function that creates a log, given a row number and array index
+ * for the thread to use */
+void createLog(char row_number, int array_index);
+
+/* Function that handles the various tasks of a log, like moving
+ * and animating it */
+void *logHandler(void *place_holder);
+
+/* Function that animates a given log */
+void animateLog(Log *log);
+
+/* Function that moves a given log */
+void moveLog(Log *log);
+
+/* Function that checks if the frog player is on the given log */
+void checkForFrogOnLog(Log *log);
+
+
+/* Functions that create the parameters for each row, then calls the
+ * manageRow function with it's unique parameters */
+void *manageRow1(void *place_holder);
+void *manageRow2(void *place_holder);
+void *manageRow3(void *place_holder);
+void *manageRow4(void *place_holder);
+
+/* Function that manages each row, and is in charge of spawning logs
+ * upon the row and joining the log's thread when it has gone offscreen */
+void manageRow(int sleep_min,
+  int sleep_max,
+  int i,
+  int next_thread_to_delete,
+  int end,
+  int rc,
+  pthread_t rowThreads[],
+  char row,
+  int row_coordinate
+);
+
+/* Function that returns a random integer between the given min and max */
+int getRandomIntegerBetween(int min, int max);
+
+#endif
+/**********************************************************************
+  Module: player.h
+  Author: Will Coombs
+  Date:   2017 June 13
+
+  Purpose: Maintain player (frog) logic and draw/animate to screen.
+
+  Changes: 
+
+  NOTES: None.
+**********************************************************************/
+
+#ifndef PLAYER_H
+#define PLAYER_H
+
+#include <stdbool.h>
+
+#define PLAYER_ANIM_TILES 2
+#define PLAYER_HEIGHT 2
+#define RIGHT_BOUND GAME_COLS-PLAYER_ANIM_TILES
+
+/* Function that creates an array of the bays at the top of the screen
+ * that the frog is attempting to reach */
+void createBays();
+
+/* Function that destroys the memory used by each bay */
+void destroyBays();
+
+/* Function in charge of animating the player */
+void *animatePlayer(void *place_holder);
+
+/* Function in charge of moving the player, using input from the
+ * keyboard */
+void *keyboardInput(void *place_holder);
+
+/* Function that checks to see if a player is below a bay that is
+ * unoccupied */
+bool playerIsInRangeOfABay();
+
+/* Function that is in charge of moving the player, by clearing the
+ * frog's current position, updating it's movement based on the given
+ * keypress, then redrawing */
+void handlePlayerMove(char key);
+
+/* Function that checks if a player is in a valid position or not. A
+ * valid position is specified by if the player is on the starting row,
+ * or on a log. Invalid positions would be if the player is in the
+ * water (i.e., past the starting row and not on a log */
+bool validPlayerPosition();
+
+/* Function that checks whether or not a frog is on any log */
+bool frogIsOnLog();
+
+/* Function in charge of decreasing the player's lives. If the player
+ * is at 1 life left and this function is called, the handleGameOver
+ * function is called */
+void decrementPlayerLives();
+
+/* Function that is in charge of the player's positioning, using the
+ * validPlayerPosition, and performs certain tasks depending on the
+ * outcome */
+void handlePositioning();
+
+/* Function that handles unlocking various mutexes, putting the given
+ * string to the screen, then signalling the main thread that the
+ * game is over */
+void handleGameOver(char *msg);
+
+/* Function that is in charge of if the q (for quit) button is pressed,
+ * and performs similar but different action than the above function */
+void handleQuit();
+
+#endif
+/**********************************************************************
+  Module: threadwrappers.h
+  Author: Will Coombs
+  Date:   2017 June 13
+
+  Purpose: Provide safe functions for threads to be created in, where
+  error checking occurs in this class to simplify the code elsewhere.
+
+  Changes: 
+
+  NOTES: None.
+**********************************************************************/
+
+#ifndef THREADWRAPPERS_H
+#define THREADWRAPPERS_H
+
+/* Function that is in charge of creating a thread, given the same
+ * parameters as pthread_create. This function also handles the error
+ * checking from creating a thread, simplifying code elsewhere  */
+int createSafeThread(pthread_t *given_thread, const pthread_attr_t *thread_attributes, void *(*target_function) (void *), void *arg);
+
+/* Function that is in charge of joining a thread, given the same
+ * parameters as pthread_join. This function also handles the error
+ * checming from joining a thread, simplifying code elsewhere */
+int joinSafeThread(pthread_t given_thread, void **return_value);
+
+/* Function that sleeps a given thread for the given number of
+ * ticks. However, the sleeping is done in a for-loop, and if the
+ * game running condition is changed, the loop and thread exits.
+ * This assists with closing the game down quickly and cleanly */
+void safeSleep(int ticks);
+
+#endif
+/**********************************************************************
+  Module: console.c
+  Author: Jim Young
+  Date:   2017 May 3
+
+  Purpose: see console.h
+
+  Changes: 
+    2017 May 3 [ Jim Young ]
+
+  NOTES: none
+**********************************************************************/
+
+#include "console.h"
+#include <curses.h>
+#include <string.h>
+#include <time.h>        /*for nano sleep */
+#include <stdbool.h>
+
+
+static int CON_WIDTH, CON_HEIGHT;
+static int consoleLock = false;
+static int MAX_STR_LEN = 256; /* for strlen checking */
+
+/* Local functions */
+
+static bool checkConsoleSize(int reqHeight, int reqWidth) 
+{
+
+	if ( (reqWidth > COLS) || (reqHeight > LINES) ) 
+ 	{
+    		fprintf(stderr, "\n\n\rSorry, your window is only %ix%i. \n\r%ix%i is required. Sorry.\n\r", COLS, LINES, reqWidth, reqHeight);
+    		return (false);
+  	}
+
+  return(true);
+}
+
+bool consoleInit(int height, int width, char *image[])  /* assumes image height/width is same as height param */
+{
+	bool status;
+
+	initscr();
+	crmode();
+	noecho();
+	clear();
+
+	CON_HEIGHT = height;  CON_WIDTH = width;
+	status = checkConsoleSize(CON_HEIGHT, CON_WIDTH);
+
+	if (status) 
+	{
+		consoleDrawImage(0, 0, image, CON_HEIGHT);
+		consoleRefresh();
+	}
+
+	return(status);
+}
+
+void consoleDrawImage(int row, int col, char *image[], int height) 
+{
+	int i, length;
+	int newLeft, newRight, newOffset, newLength;
+
+	if (consoleLock) return;
+
+	newLeft  = col < 0 ? 0 : col;
+	newOffset = col < 0 ? -col : 0;
+
+	for (i = 0; i < height; i++) 
+	{
+		if (row+i < 0 || row+i >= CON_HEIGHT)
+			continue;
+		length = strnlen(image[i], MAX_STR_LEN);
+		newRight = col+length >= CON_WIDTH ? CON_WIDTH-1 : col+length;
+		newLength = newRight - newLeft + 1;
+		if (newOffset >= length || newLength <= 0)
+		  continue;
+
+		if (mvaddnstr(row+i, newLeft, image[i]+newOffset, newLength) == ERR)
+			fprintf(stderr, "ERROR drawing to screen"); /* smarter handling is needed */
+	}
+}
+
+void consoleClearImage(int row, int col, int height, int width) 
+{
+	int i, j;
+	if (consoleLock) return;
+
+	if (col+width > CON_WIDTH)
+		width = CON_WIDTH-col;
+	if (col < 0) 
+	{
+		width += col; /* -= -col */
+		col = 0;
+	}
+
+	if (width < 1 || col >= CON_WIDTH) /* nothing to clear */
+		return;
+
+	for (i = 0; i < height; i++) 
+	{
+		if (row+i < 0 || row+i >= CON_HEIGHT)
+			continue;
+		move(row+i, col);
+		for (j = 0; j < width; j++)
+	    		addch(' ');
+	}
+}
+
+void consoleRefresh(void)
+{
+	if (!consoleLock) 
+	{
+	    move(LINES-1, COLS-1);
+	    refresh();
+	}
+}
+
+void consoleFinish(void) 
+{
+    endwin();
+}
+
+void putBanner(const char *str) 
+{
+  if (consoleLock) return;
+  int len;
+
+  len = strnlen(str,MAX_STR_LEN);
+  
+  move (CON_HEIGHT/2, (CON_WIDTH-len)/2);
+  addnstr(str, len);
+
+  consoleRefresh();
+}
+
+void putString(char *str, int row, int col, int maxlen) 
+{
+  if (consoleLock) return;
+  move(row, col);
+  addnstr(str, maxlen);
+}
+
+
+/* setup to work in USECS, reduces risk of overflow */
+/* 10000 usec = 10 ms, or 100fps */
+#define TIMESLICE_USEC 10000
+#define TIME_USECS_SIZE 1000000
+#define USEC_TO_NSEC 1000  
+struct timespec getTimeout(int ticks) 
+{
+  struct timespec rqtp;
+
+  /* work in usecs at first */
+  rqtp.tv_nsec = TIMESLICE_USEC * ticks;
+
+  /* handle usec overflow */
+  rqtp.tv_sec = rqtp.tv_nsec / TIME_USECS_SIZE;
+  rqtp.tv_nsec %= TIME_USECS_SIZE;
+
+  rqtp.tv_nsec *= USEC_TO_NSEC;  /*convert to nsecs */
+  return rqtp;
+}
+
+void sleepTicks(int ticks) 
+{
+
+  if (ticks <= 0)
+    return;
+
+  struct timespec rqtp = getTimeout(ticks);
+  nanosleep(&rqtp, NULL);
+}
+
+#define FINAL_PAUSE 2 
+void finalKeypress() 
+{
+	flushinp();
+	sleepTicks(FINAL_PAUSE);
+    	move(LINES-1, COLS-1);
+	getch(); /* wait for user to press a character, blocking. */
+}
+
+void disableConsole(int disabled) 
+{
+	consoleLock = disabled;
+}
+/**********************************************************************
+  Module: frogger.c
+  Author: Will Coombs
+  Date:   2017 June 13
+
+  Purpose: see frogger.h
+
+  Changes: 
+
+  NOTES: None.
+**********************************************************************/
+
+#define _GNU_SOURCE
+
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <assert.h>
+#include <stdbool.h>
+
+#include "console.h"
+#include "frogger.h"
+#include "linkedlist.h"
+#include "threadwrappers.h"
+#include "player.h"
+#include "log.h"
+#include "gameglobals.h"
+
+#define LIVES_Y (GAME_COLS/2)+2
+
+extern char *GAME_BOARD[];
+
+pthread_t screenThread;
+pthread_t playerThread;
+pthread_t keyboardThread;
+pthread_t upkeepThread;
+pthread_t logRow1Thread;
+pthread_t logRow2Thread;
+pthread_t logRow3Thread;
+pthread_t logRow4Thread;
+
+void executeGame() {
+  initialize();
+}
+
+void initialize() {
+  lockGameRunning();
+  setGameStillRunning(true);
+  unlockGameRunning();
+
+  initializeLogList();
+  createBays();
+
+  int rc1 = createSafeThread(&screenThread, NULL, refreshScreen, NULL);
+  int rc2 = createSafeThread(&playerThread, NULL, animatePlayer, NULL);
+  int rc3 = createSafeThread(&keyboardThread, NULL, keyboardInput, NULL);
+  int rc4 = createSafeThread(&upkeepThread, NULL, upkeep, NULL);
+  int rc5 = createSafeThread(&logRow1Thread, NULL, manageRow1, NULL);
+  int rc6 = createSafeThread(&logRow2Thread, NULL, manageRow2, NULL);
+  int rc7 = createSafeThread(&logRow3Thread, NULL, manageRow3, NULL);
+  int rc8 = createSafeThread(&logRow4Thread, NULL, manageRow4, NULL);
+
+  // put the main program thread to sleep and wait for a signal to cleanup
+  lockGameRunning();
+  while (gameStillRunning()) {
+    conditionWait();
+  }
+  unlockGameRunning();
+
+  rc2 = joinSafeThread(playerThread, NULL);
+  rc4 = joinSafeThread(upkeepThread, NULL);
+  rc5 = joinSafeThread(logRow1Thread, NULL);
+  rc6 = joinSafeThread(logRow2Thread, NULL);
+  rc7 = joinSafeThread(logRow3Thread, NULL);
+  rc8 = joinSafeThread(logRow4Thread, NULL);
+  rc3 = joinSafeThread(keyboardThread, NULL);  
+  rc1 = joinSafeThread(screenThread, NULL);
+
+  exitGame();
+  pthread_exit(NULL);
+}
+
+void *refreshScreen(void *place_holder) {
+  lockScreen();
+  bool clean = consoleInit(GAME_ROWS, GAME_COLS, GAME_BOARD);
+  unlockScreen();
+
+  if (clean) {
+    while (gameStillRunning()) {
+      lockScreen();
+      consoleRefresh();
+      unlockScreen();
+      sleepTicks(1);
+    }
+
+    lockScreen();  
+    consoleFinish();
+    unlockScreen();
+  }
+
+  pthread_exit(NULL);
+}
+
+void *upkeep(void *place_holder) {
+  int prevLives = getPlayerLives();
+  char *livesAsString = (char *)malloc(sizeof(char));
+
+  sprintf(livesAsString, "%d", getPlayerLives());
+
+  lockScreen();
+  putString(livesAsString, 0, LIVES_Y, strlen(livesAsString));
+  free(livesAsString);
+  unlockScreen();
+
+  while (gameStillRunning()) {
+    safeSleep(5);
+    lockLogList();
+    cleanupDeadLogs();
+    unlockLogList();
+
+    if (prevLives != getPlayerLives()) {
+      lockScreen();
+      lockPlayer();
+      prevLives--;
+      unlockPlayer();
+      unlockScreen();
+
+      char *livesAsString = (char *)malloc(sizeof(char));
+      sprintf(livesAsString, "%d", getPlayerLives());
+
+      lockScreen();
+      putString(livesAsString, 0, LIVES_Y, strlen(livesAsString));
+      unlockScreen();
+
+      free(livesAsString);
+    }
+  }
+
+  pthread_exit(NULL);
+}
+
+void cleanupDeadLogs() {
+  LinkedList *log_list = getLogList();
+  int i = 0;
+  Log *curr_log = firstElement(log_list);
+  bool done = false;
+
+  while (i < log_list->number_of_nodes && !done) {
+    assert(curr_log != NULL);
+
+    if (curr_log->has_been_joined) {
+      bool result = delete(log_list, curr_log);
+      if (!result) {
+        perror("deleting a log");
+        exit(-1);
+      }
+
+      done = true;
+    }
+
+    i++;
+    curr_log = nextElement(log_list);
+  }
+}
+
+void exitGame() {
+  LinkedList *log_list = getLogList();
+
+  destroyList(log_list);
+  free(log_list);
+  destroyBays();
+  destroyMutexes();;
+
+  printf("Done processing.\n");
+}
+/**********************************************************************
+  Module: gameglobals.c
+  Author: Will Coombs
+  Date:   2017 June 13
+
+  Purpose: see gameglobals.h
+
+  Changes: 
+
+  NOTES: None.
+**********************************************************************/
+
+#include <pthread.h>
+#include <stdbool.h>
+
+#include "gameglobals.h"
+#include "frogger.h"
+#include "player.h"
+#include "threadwrappers.h"
+#include "linkedlist.h"
+
+char *GAME_BOARD[] = {
+"                                   Lives:",
+"/------\\          /------\\          /------\\          /------\\          /------\\",
+"|      |          |      |          |      |          |      |          |      |",
+"+      +----------+      +----------+      +----------+      +----------+      +",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"",
+"",
+"",
+"" };
+
+pthread_mutexattr_t attributes;
+
+pthread_mutex_t gameRunningMutex;
+pthread_mutex_t screenMutex;
+pthread_mutex_t playerMutex;
+pthread_mutex_t keyboardMutex;
+pthread_mutex_t logManagersMutex;
+pthread_mutex_t logListMutex;
+
+pthread_cond_t gameRunningCond;
+pthread_condattr_t gameRunningCondAttributes;
+
+pthread_t screenThread;
+pthread_t playerThread;
+pthread_t keyboardThread;
+pthread_t upkeepThread;
+pthread_t logRow1Thread;
+pthread_t logRow2Thread;
+pthread_t logRow3Thread;
+pthread_t logRow4Thread;
+
+bool game_still_running;
+int player_lives;
+LinkedList *log_list;
+
+void initializeLogList() {
+  log_list = createList();
+}
+
+LinkedList *getLogList() {
+  return log_list;
+}
+
+void setGameStillRunning(bool result) {
+  game_still_running = result;
+}
+
+bool gameStillRunning() {
+  return game_still_running;
+}
+
+void setPlayerLives(int amount) {
+  player_lives += amount;
+}
+
+int getPlayerLives() {
+  return player_lives;
+}
+
+void initializeMutexes() {
+  pthread_mutexattr_init(&attributes);
+  pthread_mutexattr_settype(&attributes, PTHREAD_MUTEX_NORMAL);
+ 
+  pthread_cond_init(&gameRunningCond, NULL);
+  
+  pthread_mutex_init(&gameRunningMutex, &attributes);
+  pthread_mutex_init(&screenMutex, &attributes);
+  pthread_mutex_init(&playerMutex, &attributes);
+  pthread_mutex_init(&keyboardMutex, &attributes);
+  pthread_mutex_init(&logManagersMutex, &attributes);
+  pthread_mutex_init(&logListMutex, &attributes);
+}
+
+void conditionWait() {
+  pthread_cond_wait(&gameRunningCond, &gameRunningMutex);
+}
+
+void conditionSignal() {
+  pthread_cond_signal(&gameRunningCond);
+}
+
+void destroyMutexes() {
+  pthread_mutex_destroy(&gameRunningMutex);
+  pthread_mutex_destroy(&screenMutex);
+  pthread_mutex_destroy(&playerMutex);
+  pthread_mutex_destroy(&keyboardMutex);
+  pthread_mutex_destroy(&logManagersMutex);
+  pthread_mutex_destroy(&logListMutex);
+}
+
+void lockGameRunning() {
+  pthread_mutex_lock(&gameRunningMutex);
+}
+
+void lockScreen() {
+  pthread_mutex_lock(&screenMutex);
+}
+
+void lockPlayer() {
+  pthread_mutex_lock(&playerMutex);
+}
+
+void lockKeyboard() {
+  pthread_mutex_lock(&keyboardMutex);
+}
+
+void lockLogManagers() {
+  pthread_mutex_lock(&logManagersMutex);
+}
+
+void lockLogList() {
+  pthread_mutex_lock(&logListMutex);
+}
+
+void unlockGameRunning() {
+  pthread_mutex_unlock(&gameRunningMutex);
+}
+
+void unlockScreen() {
+  pthread_mutex_unlock(&screenMutex);
+}
+
+void unlockPlayer() {
+  pthread_mutex_unlock(&playerMutex);
+}
+
+void unlockKeyboard() {
+  pthread_mutex_unlock(&keyboardMutex);
+}
+
+void unlockLogManagers() {
+  pthread_mutex_unlock(&logManagersMutex);
+}
+
+void unlockLogList() {
+  pthread_mutex_unlock(&logListMutex);
+}
+/**********************************************************************
+  Module: linkedlist.c
+  Author: Will Coombs
+  Date:   2017 June 13
+
+  Purpose: see linkedlist.h
+
+  Changes: 
+
+  NOTES: None.
+**********************************************************************/
+
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <assert.h>
+#include <stdbool.h>
+
+#include "linkedlist.h"
+#include "gameglobals.h"
+
+LinkedList *createList() {
+  LinkedList *new_list = (LinkedList *)malloc(sizeof(LinkedList));
+  new_list->top = NULL;
+  new_list->tail = NULL;
+  new_list->traversal_node = NULL;
+  new_list->number_of_nodes = 0;
+
+  return new_list;
+}
+
+void validateLinkedList(LinkedList *list) {
+  if (list->number_of_nodes == 0) {
+    assert(list->top == NULL);
+  } else if (list->number_of_nodes == 1) {
+    assert(list->tail == list->top);
+  } else {
+    assert(list->top != NULL && list->top->next != NULL);
+  }
+}
+
+bool add(LinkedList *list, void *new_element) {
+  bool result = false;
+  Node *new_node = NULL;
+
+  validateLinkedList(list);
+
+  assert(new_element != NULL);
+  if (new_element != NULL) {
+    new_node = (Node *)malloc(sizeof(Node));
+    
+    if (new_node != NULL) {
+      new_node->element = (void *)malloc(sizeof(new_element));
+
+      if (new_node->element != NULL) {
+        new_node->element = new_element;
+	
+	if (list->top == NULL) {
+	  new_node->next = list->top;
+          list->top = new_node;
+	  list->tail = new_node;
+	} else {
+	  list->tail->next = new_node;
+	  list->tail = new_node;
+	  new_node->next = list->top;
+	}
+
+        list->number_of_nodes++;
+        result = true;
+      } else {
+        free(new_node->element);
+	free(new_node);
+      }
+    } else {
+      free(new_node);
+    }
+  }
+
+  return result;
+}
+
+bool delete(LinkedList *list, void *target) {
+  bool result = 0;
+  bool found = 0;
+  int i = 0;
+  Node *curr = list->top;
+  Node *prev = NULL;
+
+  validateLinkedList(list);
+
+  assert(target != NULL);
+  if (target != NULL) {
+    if (list->top->element == target) {
+      found = true;
+    }
+    
+    while (i < list->number_of_nodes && !found) { 
+      prev = curr;
+      curr = curr->next;
+      
+      if (curr->element == target) {
+        found = true;
+      }
+
+      i++;
+    }
+
+    if (found && curr != NULL) {
+      if (prev != NULL) {
+        if (list->tail == curr) {
+	  list->tail = prev;
+	}
+
+	if (list->traversal_node == curr) {
+	  list->traversal_node = prev;
+	}
+
+        prev->next = curr->next;
+      } else {
+	if (list->traversal_node == curr) {
+	  list->traversal_node = list->tail;
+	  list->tail->next = curr->next;
+	}
+
+        // deleting the first element in the list. check to see if it is the only
+	// one in the list. if it is, the logic is setup such that top->next will
+	// point to itself, as this is a circular list. in this case, top and tail
+	// will need to explicitly be set to null
+        if (list->number_of_nodes == 1) {
+	  list->top = NULL;
+	  list->tail = NULL;
+	} else {
+          list->top = curr->next;
+	  list->tail->next = list->top;
+	}
+      }
+      
+      free(curr->element);
+      curr->element = NULL;
+      free(curr);
+      curr = NULL;
+
+      result = true;
+      list->number_of_nodes--;
+
+      assert(curr == NULL);
+      validateLinkedList(list);
+    }
+  }
+
+  return result;
+}
+
+void destroyList(LinkedList *list) {
+  void *the_element = firstElement(list);
+
+  while (list->number_of_nodes != 0) {
+    bool deleted  = delete(list, the_element);
+    if (!deleted) {
+      perror("deleting a node");
+      exit(-1);
+    }
+
+    the_element = nextElement(list);
+  }
+
+  assert(list->number_of_nodes == 0);
+}
+
+void *firstElement(LinkedList *list) {
+  void *the_element = NULL;
+
+  if (list->top != NULL) {
+    list->traversal_node = list->top->next;
+    the_element = list->top->element;
+  }
+
+  return the_element;
+}
+
+void *nextElement(LinkedList *list) {
+  void *the_element = NULL;
+
+  if (list->traversal_node != NULL) {
+    the_element = list->traversal_node->element;
+    list->traversal_node = list->traversal_node->next;
+  }
+
+  if (list->traversal_node == NULL) {
+    list->traversal_node = list->top;
+    the_element = list->top->element;
+  }
+
+  return the_element;
+}
+/**********************************************************************
+  Module: log.c
+  Author: Will Coombs
+  Date:   2017 June 13
+
+  Purpose: see log.h
+
+  Changes: 
+
+  NOTES: None.
+**********************************************************************/
+
+#include <pthread.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <assert.h>
+#include <time.h>
+#include <stdbool.h>
+
+#include "log.h"
+#include "console.h"
+#include "frogger.h"
+#include "linkedlist.h"
+#include "threadwrappers.h"
+#include "gameglobals.h"
+#include "player.h"
+
+#define LOG_ANIM_TILES 8
+#define LOG_HEIGHT 4
+#define NUM_THREADS_PER_ROW 5
+
+#define LEFT_BOUNDARY (-(strlen(LOG_GRAPHIC[0][0])))-5
+#define RIGHT_BOUNDARY (strlen(LOG_GRAPHIC[0][0])+GAME_COLS)+5
+#define LEFT_DEAD_BOUNDARY -30
+#define RIGHT_DEAD_BOUNDARY 130
+
+static char* LOG_GRAPHIC[LOG_ANIM_TILES][LOG_HEIGHT+1] = {
+  {"-=======================\\",
+   "|                       |",
+   "|                       |",
+   "\\=======================+"},
+
+  {"/=======================\\",
+   "-   x                   |",
+   "| x                     +",
+   "\\=======================/"},
+
+  {"/=======================\\",
+   "|    x                  +",
+   "-      x                |",
+   "\\=======================/"},
+
+  {"/=======================+",
+   "|         x             |",
+   "|       x               |",
+   "-=======================/"},
+
+  {"/==================+====\\",
+   "|          x            |",
+   "|            x          |",
+   "\\====-==================/"},
+
+  {"/=============+=========\\",
+   "|               x       |",
+   "|             x         |",
+   "\\=========-=============/"},
+
+  {"/=========+=============\\",
+   "|                x      |",
+   "|                  x    |",
+   "\\=============-=========/"},
+
+  {"/====+==================\\",
+   "|                     x |",
+   "|                   x   |",
+   "\\==================-====/"},
+};
+
+extern int playerX;
+extern int playerY;
+
+extern char **tile;
+
+pthread_t row1Threads[NUM_THREADS_PER_ROW];
+pthread_t row2Threads[NUM_THREADS_PER_ROW];
+pthread_t row3Threads[NUM_THREADS_PER_ROW];
+pthread_t row4Threads[NUM_THREADS_PER_ROW];
+
+void createLog(char row_number, int array_index) {
+  LinkedList *log_list = getLogList();
+  Log *new_log = (Log *)malloc(sizeof(Log));
+  new_log->contains_frog = false;
+  new_log->on_screen = true;
+  new_log->curr_log_tile = LOG_GRAPHIC[0];
+  new_log->curr_graphic_index = 0;
+  new_log->animate_sleep = 0;
+  new_log->move_sleep = 0;
+  new_log->has_been_joined = false;
+
+  switch (row_number) {
+    case '1':
+      new_log->row = ROW_1_Y;
+      new_log->currX = LEFT_BOUNDARY;
+      new_log->displacement = 1;
+      new_log->max_animate = 20;
+      new_log->max_move = 9;
+      new_log->thread_id = row1Threads[array_index];
+      break;
+    case '2':
+      new_log->row = ROW_2_Y;
+      new_log->currX = RIGHT_BOUNDARY;
+      new_log->displacement = -1;
+      new_log->max_animate = 15;
+      new_log->max_move = 7;
+      new_log->thread_id = row2Threads[array_index];
+      break;
+    case '3':
+      new_log->row = ROW_3_Y;
+      new_log->currX = LEFT_BOUNDARY;
+      new_log->displacement = 1;
+      new_log->max_animate = 10;
+      new_log->max_move = 5;
+      new_log->thread_id = row3Threads[array_index];
+      break;
+    case '4':
+      new_log->row = ROW_4_Y;
+      new_log->currX = RIGHT_BOUNDARY;
+      new_log->displacement = -1;
+      new_log->max_animate = 5;
+      new_log->max_move = 3;
+      new_log->thread_id = row4Threads[array_index];
+      break;
+    default:
+      free(new_log);
+      new_log = NULL;
+      break;
+  }
+
+  lockLogList();
+  bool result = add(log_list, new_log);
+  unlockLogList();
+
+  if (!result) {
+    perror("adding to log list");
+    exit(-1);
+  }
+}
+
+void *logHandler(void *args) {
+  Thread_Args *the_args = args;
+  createLog(the_args->row_number, the_args->array_index);
+  LinkedList *log_list = getLogList();
+
+  while (firstElement(log_list) == NULL) {
+    // wait for at least one log to be added to the list
+  }
+
+  while (gameStillRunning()) {
+    lockLogList();
+    Log *curr_log = nextElement(log_list);
+
+    assert(curr_log != NULL);
+    if (curr_log->on_screen && curr_log->thread_id == pthread_self()) {
+      if (curr_log->animate_sleep == 0) {
+        animateLog(curr_log);
+      }
+      if (curr_log->move_sleep == 0) {
+        moveLog(curr_log);
+      }
+      
+      curr_log->animate_sleep = (curr_log->animate_sleep+1) % curr_log->max_animate;
+      curr_log->move_sleep = (curr_log->move_sleep+1) % curr_log->max_move;
+
+      if (!curr_log->on_screen) {
+        unlockLogList();
+        pthread_exit(NULL);
+      } else {
+        unlockLogList();
+        sleepTicks(1);
+      }
+    } else {
+      unlockLogList();
+    }
+  }
+
+  pthread_exit(NULL);
+}
+
+// Animate and move are in their own separate functions and have their own separate
+// max_speed parameters in the Log struct, so that the movespeed on a log has no effect
+// on the animation speed of it - they can both be set independantly of one another
+void animateLog(Log *curr_log) {
+  lockScreen();
+
+  int tile_index = curr_log->curr_graphic_index;
+  consoleClearImage(
+    curr_log->row,
+    curr_log->currX,
+    LOG_HEIGHT,
+    strlen(curr_log->curr_log_tile[0])
+  );
+  consoleDrawImage(curr_log->row, curr_log->currX, curr_log->curr_log_tile, LOG_HEIGHT);
+  
+  if (curr_log->contains_frog) {
+    lockPlayer();
+    consoleDrawImage(playerY, playerX, tile, PLAYER_HEIGHT);
+    unlockPlayer();
+  }
+  
+  curr_log->curr_log_tile = LOG_GRAPHIC[(tile_index+1)%LOG_ANIM_TILES];
+  curr_log->curr_graphic_index = (tile_index+1)%LOG_ANIM_TILES;
+      
+  unlockScreen();
+}
+
+void moveLog(Log *curr_log) {
+  lockScreen();
+
+  int x = curr_log->currX;
+  consoleClearImage(
+    curr_log->row,
+    curr_log->currX,
+    LOG_HEIGHT,
+    strlen(curr_log->curr_log_tile[0])
+  );
+  curr_log->currX = x+curr_log->displacement;
+  consoleDrawImage(curr_log->row, curr_log->currX, curr_log->curr_log_tile, LOG_HEIGHT);
+
+  lockPlayer();
+  checkForFrogOnLog(curr_log);
+
+  if (validPlayerPosition()) {
+    if (curr_log->contains_frog) {
+      switch (curr_log->row) {
+        case ROW_1_Y:
+        case ROW_3_Y:
+          if (playerX <= (RIGHT_BOUND-1)) {
+	    playerX += curr_log->displacement;
+	  }
+          break;
+        case ROW_2_Y:
+        case ROW_4_Y:
+          if (playerX >= 1) {
+	    playerX += curr_log->displacement;
+	  }
+          break;
+        default:
+          break;
+      }
+
+      consoleDrawImage(playerY, playerX, tile, PLAYER_HEIGHT);
+    }
+  } else {
+    decrementPlayerLives();
+  }
+
+  unlockPlayer();
+
+  switch (curr_log->row) {
+    case ROW_1_Y:
+    case ROW_3_Y:
+      if (curr_log->currX > RIGHT_DEAD_BOUNDARY) {
+        curr_log->on_screen = false;
+      }
+      break;
+    case ROW_2_Y:
+    case ROW_4_Y:
+      if (curr_log->currX < LEFT_DEAD_BOUNDARY) {
+        curr_log->on_screen = false;
+      }
+      break;
+    default:
+      break;
+  }
+
+  unlockScreen();
+}
+
+void checkForFrogOnLog(Log *curr_log) {
+  int left = curr_log->currX + 1;
+  int right = curr_log->currX + strlen(LOG_GRAPHIC[0][1]) - 3;
+
+  if (playerX >= left && playerX <= right && (playerY-1) == curr_log->row) {
+    curr_log->contains_frog = true;
+  } else {
+    curr_log->contains_frog = false;
+  }
+}
+
+void *manageRow1(void *place_holder) {
+  manageRow(300, 450, 0, 0, NUM_THREADS_PER_ROW-1, 0, row1Threads, '1', ROW_1_Y);
+  pthread_exit(NULL);
+}
+
+void *manageRow2(void *place_holder) {
+  manageRow(300, 550, 0, 0, NUM_THREADS_PER_ROW-1, 0, row2Threads, '2', ROW_2_Y);
+  pthread_exit(NULL);
+}
+
+void *manageRow3(void *place_holder) {
+  manageRow(250, 400, 0, 0, NUM_THREADS_PER_ROW-1, 0, row3Threads, '3', ROW_3_Y);
+  pthread_exit(NULL);
+}
+
+void *manageRow4(void *place_holder) {
+  manageRow(125, 250, 0, 0, NUM_THREADS_PER_ROW-1, 0, row4Threads, '4', ROW_4_Y);
+  pthread_exit(NULL);
+}
+ 
+void manageRow(int sleep_min,
+  int sleep_max,
+  int i,
+  int next_thread_to_delete,
+  int end,
+  int rc,
+  pthread_t rowThreads[],
+  char row,
+  int row_coordinate
+  ) {
+
+  LinkedList *log_list = getLogList();
+  while (gameStillRunning()) {
+    if (rowThreads[end] == 0) {
+      Thread_Args args;
+      args.row_number = row;
+      args.array_index = i;
+      rc = createSafeThread(&rowThreads[i], NULL, logHandler, (void *)&args);
+  
+      i = (i+1) % NUM_THREADS_PER_ROW;
+    }
+
+    safeSleep(getRandomIntegerBetween(sleep_min, sleep_max));
+
+    lockLogList();
+    int k = 0;
+    bool done = false;
+    Log *curr_log = firstElement(log_list);
+
+    while (!done && k < log_list->number_of_nodes) {
+      if (!curr_log->on_screen && curr_log->row == row_coordinate) {
+	rc = joinSafeThread(rowThreads[next_thread_to_delete], NULL);
+	rowThreads[next_thread_to_delete] = 0;
+	curr_log->has_been_joined = true;
+
+	next_thread_to_delete = (next_thread_to_delete+1) % NUM_THREADS_PER_ROW;
+	end = (end+1) % NUM_THREADS_PER_ROW;
+	done = true;
+      } 
+    
+      curr_log = nextElement(log_list);
+      k++;
+    }
+
+    unlockLogList();
+  }
+}
+
+int getRandomIntegerBetween(int min, int max) {
+  int number = -1;
+  int bounds = (max-min)+1;
+
+  srand(time(NULL));
+  number = rand() % (bounds) + min;
+
+  return number;
+}
+/**********************************************************************
+  Module: main.c
+  Author: Will Coombs
+  Date:   2017 June 13
+
+  Purpose: The game 'Frogger' as a multi-threaded program.
+
+  Changes: 
+
+  NOTES: 
+**********************************************************************/
+
+#include "frogger.h" 
+
+int main(int argc, char**argv) {
+  executeGame();
+}
+/**********************************************************************
+  Module: player.c
+  Author: Will Coombs
+  Date:   2017 June 13
+
+  Purpose: see player.h
+
+  Changes: 
+
+  NOTES: None.
+**********************************************************************/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <sys/select.h>
+#include <assert.h>
+#include <stdbool.h>
+
+#include "player.h"
+#include "console.h"
+#include "frogger.h"
+#include "threadwrappers.h"
+#include "linkedlist.h"
+#include "log.h"
+#include "gameglobals.h"
+
+Bay *bays[NUMBER_OF_BAYS];
+
+static char* PLAYER_GRAPHIC[PLAYER_ANIM_TILES][PLAYER_HEIGHT+1] = {
+  {"@@",
+   "<>"},
+  {"--",
+   "<>"}
+};
+
+#define PLAYER_STARTING_LOCATION_X (GAME_COLS/2)-1
+#define PLAYER_STARTING_LOCATION_Y GAME_ROWS-PLAYER_HEIGHT-1
+#define JUMP_LENGTH PLAYER_HEIGHT*2
+
+#define GOAL_FROGS_AT_HOME 5
+
+#define BAY_1_LEFT 0
+#define BAY_1_RIGHT 8
+#define BAY_2_LEFT 20
+#define BAY_2_RIGHT 26
+#define BAY_3_LEFT 37
+#define BAY_3_RIGHT 44
+#define BAY_4_LEFT 55
+#define BAY_4_RIGHT 62
+#define BAY_5_LEFT 73
+#define BAY_5_RIGHT 80
+
+#define QUITTER_MSG "Quitter..."
+#define NO_LIVES_MSG "Game over. Do, or do not... there is no try!"
+#define WIN_MSG "All frogs are home. You win!"
+
+bool playerAlive;
+int playerX;
+int playerY;
+int frogs_at_home = 0;
+
+char **tile;
+
+void createBays() {
+  Bay *bay1 = (Bay *)malloc(sizeof(Bay));
+  bay1->left_border = BAY_1_LEFT;
+  bay1->right_border = BAY_1_RIGHT;
+  bay1->contains_frog = false;
+  bays[0] = bay1;
+
+  Bay *bay2 = (Bay *)malloc(sizeof(Bay));
+  bay2->left_border = BAY_2_LEFT;
+  bay2->right_border = BAY_2_RIGHT;
+  bay2->contains_frog = false;
+  bays[1] = bay2;
+
+  Bay *bay3 = (Bay *)malloc(sizeof(Bay));
+  bay3->left_border = BAY_3_LEFT;
+  bay3->right_border = BAY_3_RIGHT;
+  bay3->contains_frog = false;
+  bays[2] = bay3;
+
+  Bay *bay4 = (Bay *)malloc(sizeof(Bay));
+  bay4->left_border = BAY_4_LEFT;
+  bay4->right_border = BAY_4_RIGHT;
+  bay4->contains_frog = false;
+  bays[3] = bay4;
+
+  Bay *bay5 = (Bay *)malloc(sizeof(Bay));
+  bay5->left_border = BAY_5_LEFT;
+  bay5->right_border = BAY_5_RIGHT;
+  bay5->contains_frog = false;
+  bays[4] = bay5; 
+}
+
+void destroyBays() {
+  int i;
+  for (i = 0; i < NUMBER_OF_BAYS; i++) {
+    free(bays[i]);
+  }
+}
+
+void *animatePlayer(void *place_holder) {
+  playerAlive = 1;
+  setPlayerLives(4);
+  playerX = PLAYER_STARTING_LOCATION_X;
+  playerY = PLAYER_STARTING_LOCATION_Y;
+  
+  while (playerAlive) {
+    int i;
+    
+    for (i = 0; i<PLAYER_ANIM_TILES; i++) {
+      lockScreen();
+      lockPlayer();
+
+      tile = PLAYER_GRAPHIC[i];
+      consoleClearImage(playerY, playerX, PLAYER_HEIGHT, strlen(tile[0]));
+      consoleDrawImage(playerY, playerX, tile, PLAYER_HEIGHT);
+      
+      unlockPlayer();
+      unlockScreen();
+        
+      safeSleep(50);
+    }
+  }
+ 
+  pthread_exit(NULL);
+}
+
+void *keyboardInput(void *place_holder) {
+  // sleep until the player is alive, otherwise, the thread running through
+  // this function will hit the while (playerAlive) loop, evaluate false,
+  // then exit the function. So this while loop exists to allow the player
+  // thread to catch up and establish itself
+  while (!playerAlive) {
+    // wait
+  }
+  
+  while (gameStillRunning() && playerAlive) {
+    int return_code = 0;
+    
+    while (gameStillRunning() && playerAlive && return_code == 0) {
+      fd_set set;
+      FD_ZERO(&set);
+      FD_SET(STDIN_FILENO, &set);
+      struct timespec timeout = getTimeout(1);
+      int return_code = pselect(FD_SETSIZE, &set, NULL, NULL, &timeout, NULL);
+
+      if (return_code == -1) {
+        perror("select()");
+	exit(-1);
+      } else if (playerAlive && return_code == 1) {
+        char buf[1];
+        read(0, buf, 1);
+	char key = buf[0];
+
+	if (key == 'q') {
+	  handleQuit();
+	} else {
+	  handlePlayerMove(key);
+	}
+      }
+    }
+  }
+
+  pthread_exit(NULL);
+}
+
+void handlePlayerMove(char key) {
+  int moveX = 0;
+  int moveY = 0;
+
+  switch (key) {
+    case 'w':
+      if ((playerY-1) == ROW_4_Y && playerIsInRangeOfABay()) {
+        moveY = -(JUMP_LENGTH-1);
+      } else if (playerY > ROW_3_Y) {
+        moveY = -JUMP_LENGTH;
+      }
+      break;
+    case 'a':
+      if (playerX > 0) {
+        moveX = -1;
+      }
+      break;
+    case 's':
+      if (playerY < PLAYER_STARTING_LOCATION_Y) {
+        moveY = JUMP_LENGTH;
+      }
+      break;
+    case 'd':
+      if (playerX < RIGHT_BOUND) {
+        moveX = 1;
+      }
+      break;
+    default:
+      break;
+  }
+
+  if (moveX != 0 || moveY != 0) {
+    lockScreen();
+    lockPlayer();
+	  
+    consoleClearImage(playerY, playerX, PLAYER_HEIGHT, strlen(tile[0]));
+    playerX += moveX;
+    playerY += moveY;
+    consoleDrawImage(playerY, playerX, tile, PLAYER_HEIGHT);
+
+    handlePositioning();
+
+    unlockPlayer();
+    unlockScreen();
+  }
+}
+
+bool playerIsInRangeOfABay() {
+  bool in_range = false;
+  int i;
+
+  for (i = 0; i < NUMBER_OF_BAYS && !in_range; i++) {
+    if (!bays[i]->contains_frog) {
+      if (playerX > bays[i]->left_border && playerX < bays[i]->right_border) {
+        in_range = true;
+      }
+    }
+  }
+
+  return in_range;
+}
+
+void handlePositioning() {
+  unlockPlayer();
+  unlockScreen();
+  lockLogList();
+  lockScreen();
+  lockPlayer();
+  if (!validPlayerPosition()) {
+    decrementPlayerLives();
+  }
+
+  if (playerY < ROW_4_Y) {
+    consoleDrawImage(playerY, playerX, tile, PLAYER_HEIGHT);
+    
+    bool set = 0;
+    int i;
+    for (i = 0; i < NUMBER_OF_BAYS && !set; i++) {
+      if (playerX > bays[i]->left_border && playerX < bays[i]->right_border) {
+        bays[i]->contains_frog = true;
+	set = true;
+      }
+    }
+
+    assert(set);
+
+    playerX = PLAYER_STARTING_LOCATION_X;
+    playerY = PLAYER_STARTING_LOCATION_Y;
+
+    frogs_at_home++;
+
+    if (frogs_at_home == GOAL_FROGS_AT_HOME) {
+      handleGameOver(WIN_MSG);
+    }
+  }
+  
+  unlockLogList();
+}
+
+void decrementPlayerLives() {
+  if (getPlayerLives() > 1) {
+    setPlayerLives(-1);
+    consoleDrawImage(playerY, playerX, tile, PLAYER_HEIGHT);
+    playerX = PLAYER_STARTING_LOCATION_X;
+    playerY = PLAYER_STARTING_LOCATION_Y;
+
+    // let the screen catch up in order to display the dead frog graphic
+    unlockLogList();
+    unlockScreen();
+    unlockPlayer();
+    sleepTicks(1);
+
+    lockLogList();
+    lockScreen();
+    lockPlayer();
+
+    safeSleep(50);
+  } else {
+    handleGameOver(NO_LIVES_MSG);
+  }
+}
+
+bool validPlayerPosition() {
+  bool valid = true;
+
+  if (playerY < PLAYER_STARTING_LOCATION_Y) {
+    if (playerY >= ROW_4_Y) {
+      valid = frogIsOnLog();
+    }
+  }
+
+  return valid;
+}
+
+bool frogIsOnLog() {
+  LinkedList *log_list = getLogList();
+  int on_log = false;
+  int i = 0;
+  int done = false;
+  Log *curr_log = firstElement(log_list);
+  
+  while (!done && i < log_list->number_of_nodes) {
+    assert(curr_log != NULL);
+
+    // there's a chance there hasn't been a context switch yet, updating the contains_frog
+    // parameter in the log class. so check here as well before determining if the player
+    // is on the log or not
+    checkForFrogOnLog(curr_log);
+
+    if (curr_log->contains_frog && curr_log->on_screen) {
+      on_log = true;
+      done = true;
+    }
+
+    i++;
+    curr_log = nextElement(log_list);
+  }
+
+  return on_log;
+}
+
+void handleGameOver(char *msg) {
+  lockGameRunning();
+  setGameStillRunning(false);
+  conditionSignal();
+  unlockGameRunning();
+  
+  putString(msg,
+    PLAYER_STARTING_LOCATION_Y,
+    PLAYER_STARTING_LOCATION_X-(strlen(msg)/2),
+    strlen(msg));
+  finalKeypress();
+
+  playerAlive = false;
+  
+  unlockLogList();
+  unlockPlayer();
+  unlockScreen();
+}
+
+void handleQuit() {
+  lockScreen();	
+  putString(QUITTER_MSG,
+    PLAYER_STARTING_LOCATION_Y,
+    PLAYER_STARTING_LOCATION_X-(strlen(QUITTER_MSG)/2),
+    strlen(QUITTER_MSG));
+  finalKeypress();
+  unlockScreen();
+
+  lockPlayer();
+  playerAlive = false;
+  unlockPlayer();
+
+  lockGameRunning();
+  setGameStillRunning(false);
+  conditionSignal();
+  unlockGameRunning();
+}
+/**********************************************************************
+  Module: threadwrappers.c
+  Author: Will Coombs
+  Date:   2017 June 13
+
+  Purpose: see threadwrappers.h
+
+  Changes: 
+
+  NOTES: None.
+**********************************************************************/
+
+#define _GNU_SOURCE
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <pthread.h>
+#include <stdbool.h>
+
+#include "threadwrappers.h"
+#include "console.h"
+#include "gameglobals.h"
+
+int createSafeThread(pthread_t *given_thread, const pthread_attr_t *thread_attributes, void *(*target_function) (void *), void *arg) {
+  int rc = pthread_create(given_thread, thread_attributes, target_function, arg);
+  
+  if (rc != 0) {
+    printf("ERROR - return code from pthread_create() is %d\n", rc);
+    exit(-1);
+  }
+
+  return rc;
+}
+
+int joinSafeThread(pthread_t given_thread, void **return_value) {
+  int rc = pthread_join(given_thread, return_value);
+
+  if (rc != 0) {
+    perror("Thread join");
+    printf("%d\n", rc);
+    exit(EXIT_FAILURE);
+  }
+
+  return rc;
+}
+
+void safeSleep(int ticks) {
+  int i;
+  for (i = 0; i < ticks && gameStillRunning(); i++) {
+    sleepTicks(1);
+  }
+}
